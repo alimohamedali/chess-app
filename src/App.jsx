@@ -45,19 +45,25 @@ function generateGameId() {
 }
 
 const THEMES = [
-  { name: "كلاسيك", light: "#f0d9b5", dark: "#b58863" },
-  { name: "أزرق", light: "#dee3e6", dark: "#8ca2ad" },
-  { name: "أخضر", light: "#ffffdd", dark: "#86a666" },
-  { name: "بنفسجي", light: "#f0e6ff", dark: "#9b72cf" },
+  { name: "Classic", light: "#f0d9b5", dark: "#b58863" },
+  { name: "Blue", light: "#dee3e6", dark: "#8ca2ad" },
+  { name: "Green", light: "#ffffdd", dark: "#86a666" },
+  { name: "Purple", light: "#f0e6ff", dark: "#9b72cf" },
+];
+
+const DIFFICULTIES = [
+  { label: "Easy 🟢", depth: 2, moveTime: 1500 },
+  { label: "Medium 🟡", depth: 6, moveTime: 2000 },
+  { label: "Hard 🔴", depth: 15, moveTime: 3000 },
 ];
 
 export default function App() {
   const [game, setGame] = useState(new Chess());
   const [boardSize, setBoardSize] = useState(450);
-  const [status, setStatus] = useState("دورك! 🎯");
+  const [status, setStatus] = useState("Your turn! 🎯");
   const [optionSquares, setOptionSquares] = useState({});
   const [selectedSquare, setSelectedSquare] = useState(null);
-  const [difficulty, setDifficulty] = useState(6);
+  const [difficultyIdx, setDifficultyIdx] = useState(1);
   const [gameOver, setGameOver] = useState(false);
   const [mode, setMode] = useState(null);
   const [gameId, setGameId] = useState("");
@@ -79,6 +85,7 @@ export default function App() {
   const stockfish = useRef(null);
   const subscriptionRef = useRef(null);
   const moveListRef = useRef(null);
+  const playerColorRef = useRef("w");
 
   useEffect(() => {
     const updateSize = () => {
@@ -94,18 +101,13 @@ export default function App() {
       stockfish.current = new Worker("/stockfish.js");
       stockfish.current.postMessage("uci");
       stockfish.current.postMessage("isready");
+      setTimeout(() => resetGame(), 100);
     }
     return () => {
-      if (stockfish.current) stockfish.current.terminate();
+      if (stockfish.current) { stockfish.current.terminate(); stockfish.current = null; }
       if (subscriptionRef.current) supabase.removeChannel(subscriptionRef.current);
       stopTimer();
     };
-  }, [mode]);
-
-  useEffect(() => {
-    if (mode === "ai") {
-      setTimeout(() => resetGame(), 100);
-    }
   }, [mode]);
 
   useEffect(() => {
@@ -121,14 +123,14 @@ export default function App() {
         setWhiteTime(wtRef.current);
         if (wtRef.current <= 0) {
           stopTimer(); gameOverRef.current = true;
-          setGameOver(true); setStatus("انتهى وقت الأبيض! ⏰");
+          setGameOver(true); setStatus("White's time is up! ⏰");
         }
       } else {
         btRef.current -= 1;
         setBlackTime(btRef.current);
         if (btRef.current <= 0) {
           stopTimer(); gameOverRef.current = true;
-          setGameOver(true); setStatus("انتهى وقت الأسود! ⏰");
+          setGameOver(true); setStatus("Black's time is up! ⏰");
         }
       }
     }, 1000);
@@ -184,7 +186,10 @@ export default function App() {
 
   function handleMove(from, to) {
     if (gameOver || gameOverRef.current || viewIndex !== -1) return false;
-    if (mode === "online" && (game.turn() !== playerColor || waitingForPlayer)) return false;
+    if (mode === "online") {
+      if (game.turn() !== playerColorRef.current) return false;
+      if (waitingForPlayer) return false;
+    }
 
     const g = new Chess(game.fen());
     const move = g.move({ from, to, promotion: "q" });
@@ -196,11 +201,11 @@ export default function App() {
     if (mode === "ai") {
       if (g.isCheckmate()) {
         createSound("checkmate"); setGame(g); recordMove(g, move.san);
-        stopTimer(); gameOverRef.current = true; setGameOver(true); setStatus("إنت كسبت! 🎉");
+        stopTimer(); gameOverRef.current = true; setGameOver(true); setStatus("You win! 🎉");
         return true;
       } else if (g.isDraw()) {
         setGame(g); recordMove(g, move.san);
-        stopTimer(); gameOverRef.current = true; setGameOver(true); setStatus("تعادل! 🤝");
+        stopTimer(); gameOverRef.current = true; setGameOver(true); setStatus("Draw! 🤝");
         return true;
       }
       if (g.inCheck()) createSound("check");
@@ -209,12 +214,13 @@ export default function App() {
       setGame(g);
       recordMove(g, move.san);
       setOptionSquares(getCheckStyle(g));
-      setTimeout(() => makeStockfishMove(g), 400);
+      const delay = DIFFICULTIES[difficultyIdx].moveTime;
+      setTimeout(() => makeStockfishMove(g), delay);
     } else if (mode === "online") {
       if (move.captured) createSound("capture"); else createSound("move");
       setGame(g); recordMove(g, move.san);
       makeOnlineMove(g);
-      setStatus("دور الخصم... ⏳");
+      setStatus("Opponent's turn... ⏳");
     }
     return true;
   }
@@ -223,7 +229,10 @@ export default function App() {
 
   function onSquareClick(sq) {
     if (gameOver || gameOverRef.current || viewIndex !== -1) return;
-    if (mode === "online" && (game.turn() !== playerColor || waitingForPlayer)) return;
+    if (mode === "online") {
+      if (game.turn() !== playerColorRef.current) return;
+      if (waitingForPlayer) return;
+    }
     const piece = game.get(sq);
     if (piece && piece.color === game.turn()) {
       setSelectedSquare(sq); getMoveOptions(sq, game); return;
@@ -236,30 +245,28 @@ export default function App() {
   }
 
   function makeStockfishMove(g) {
-    setStatus("الكومبيوتر بيفكر... 🤔");
+    setStatus("Engine thinking... 🤔");
     stockfish.current.postMessage(`position fen ${g.fen()}`);
-    stockfish.current.postMessage(`go depth ${difficulty}`);
+    stockfish.current.postMessage(`go depth ${DIFFICULTIES[difficultyIdx].depth}`);
     stockfish.current.onmessage = (e) => {
       const msg = e.data;
       if (msg.startsWith("bestmove")) {
         const mv = msg.split(" ")[1];
         if (!mv || mv === "(none)") return;
-        setTimeout(() => {
-          const ng = new Chess(g.fen());
-          const result = ng.move({ from: mv.slice(0, 2), to: mv.slice(2, 4), promotion: mv[4] || "q" });
-          if (!result) return;
-          recordMove(ng, result.san);
-          if (ng.isCheckmate()) {
-            createSound("checkmate"); stopTimer(); gameOverRef.current = true;
-            setStatus("الكومبيوتر كسب! 😢"); setGameOver(true);
-          } else if (ng.isDraw()) {
-            stopTimer(); gameOverRef.current = true; setStatus("تعادل! 🤝"); setGameOver(true);
-          } else if (ng.inCheck()) { createSound("check"); setStatus("كش! ⚠️ دورك"); }
-          else if (result.captured) { createSound("capture"); setStatus("دورك! 🎯"); }
-          else { createSound("move"); setStatus("دورك! 🎯"); }
-          setGame(ng);
-          setOptionSquares(getCheckStyle(ng));
-        }, 300);
+        const ng = new Chess(g.fen());
+        const result = ng.move({ from: mv.slice(0, 2), to: mv.slice(2, 4), promotion: mv[4] || "q" });
+        if (!result) return;
+        recordMove(ng, result.san);
+        if (ng.isCheckmate()) {
+          createSound("checkmate"); stopTimer(); gameOverRef.current = true;
+          setStatus("Engine wins! 😢"); setGameOver(true);
+        } else if (ng.isDraw()) {
+          stopTimer(); gameOverRef.current = true; setStatus("Draw! 🤝"); setGameOver(true);
+        } else if (ng.inCheck()) { createSound("check"); setStatus("Check! ⚠️ Your turn"); }
+        else if (result.captured) { createSound("capture"); setStatus("Your turn! 🎯"); }
+        else { createSound("move"); setStatus("Your turn! 🎯"); }
+        setGame(ng);
+        setOptionSquares(getCheckStyle(ng));
       }
     };
   }
@@ -268,8 +275,9 @@ export default function App() {
     const id = generateGameId();
     const pid = Math.random().toString(36).substring(2);
     await supabase.from("games").insert({ id, fen: new Chess().fen(), turn: "w", status: "waiting", white_player: pid });
+    playerColorRef.current = "w";
     setGameId(id); setPlayerColor("w"); setWaitingForPlayer(true);
-    setStatus(`شارك الكود: ${id} 🔗`);
+    setStatus(`Share code: ${id} 🔗`);
     localStorage.setItem("playerId", pid);
     subscribeToGame(id, "w");
   }
@@ -278,12 +286,13 @@ export default function App() {
     const id = joinId.toUpperCase().trim();
     const pid = Math.random().toString(36).substring(2);
     const { data } = await supabase.from("games").select("*").eq("id", id).single();
-    if (!data) { setStatus("كود غلط! ❌"); return; }
+    if (!data) { setStatus("Wrong code! ❌"); return; }
     await supabase.from("games").update({ black_player: pid, status: "playing" }).eq("id", id);
     const ng = new Chess(data.fen);
+    playerColorRef.current = "b";
     setGameId(id); setPlayerColor("b"); setWaitingForPlayer(false);
     setGame(ng); setFenHistory([ng.fen()]); setSanHistory(ng.history());
-    setStatus("اللعبة بدأت! دور الأبيض 🎯");
+    setStatus("Game started! White's turn 🎯");
     localStorage.setItem("playerId", pid);
     subscribeToGame(id, "b");
     startTimer();
@@ -309,15 +318,15 @@ export default function App() {
             if (!timerRef.current) startTimer();
             if (ng.isCheckmate()) {
               createSound("checkmate"); stopTimer(); gameOverRef.current = true;
-              setStatus("كش مات! 🏆"); setGameOver(true);
+              setStatus("Checkmate! 🏆"); setGameOver(true);
             } else if (ng.isDraw()) {
-              stopTimer(); gameOverRef.current = true; setStatus("تعادل! 🤝"); setGameOver(true);
+              stopTimer(); gameOverRef.current = true; setStatus("Draw! 🤝"); setGameOver(true);
             } else if (ng.inCheck()) {
               createSound("check");
-              setStatus(ng.turn() === color ? "كش! دورك ⚠️" : "كش على الخصم ⚠️");
+              setStatus(ng.turn() === color ? "Check! Your turn ⚠️" : "Check on opponent ⚠️");
             } else {
               createSound("move");
-              setStatus(ng.turn() === color ? "دورك! 🎯" : "دور الخصم... ⏳");
+              setStatus(ng.turn() === color ? "Your turn! 🎯" : "Opponent's turn... ⏳");
             }
           }
           setOptionSquares({});
@@ -336,7 +345,7 @@ export default function App() {
     wtRef.current = 600; btRef.current = 600; turnRef.current = "w";
     const ng = new Chess();
     setGame(ng); setOptionSquares({}); setSelectedSquare(null);
-    setStatus("دورك! 🎯"); setGameOver(false);
+    setStatus("Your turn! 🎯"); setGameOver(false);
     setFenHistory([ng.fen()]); setSanHistory([]); setViewIndex(-1);
     setWhiteTime(600); setBlackTime(600);
     setTimeout(() => startTimer(), 200);
@@ -346,9 +355,10 @@ export default function App() {
     stopTimer();
     if (subscriptionRef.current) supabase.removeChannel(subscriptionRef.current);
     gameOverRef.current = false;
+    playerColorRef.current = "w";
     setMode(null); setGameId(""); setJoinId(""); setWaitingForPlayer(false);
     setGameOver(false); setGame(new Chess()); setOptionSquares({});
-    setSelectedSquare(null); setStatus("دورك! 🎯");
+    setSelectedSquare(null); setStatus("Your turn! 🎯");
     setFenHistory([]); setSanHistory([]); setViewIndex(-1);
     wtRef.current = 600; btRef.current = 600;
     setWhiteTime(600); setBlackTime(600);
@@ -378,10 +388,10 @@ export default function App() {
     return (
       <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100vh", gap:"20px", background:"#1a1a2e" }}>
         <h1 style={{ color:"white", fontSize:"2.5rem" }}>♟️ Chess App</h1>
-        <button onClick={() => setMode("ai")} style={btnStyle("#4CAF50")}>🤖 العب ضد الكومبيوتر</button>
-        <button onClick={() => setMode("online")} style={btnStyle("#2196F3")}>🌐 العب أون لاين</button>
+        <button onClick={() => setMode("ai")} style={btnStyle("#4CAF50")}>🤖 Play vs Engine</button>
+        <button onClick={() => setMode("online")} style={btnStyle("#2196F3")}>🌐 Play Online</button>
         <div style={{ marginTop:"10px" }}>
-          <p style={{ color:"#aaa", textAlign:"center", marginBottom:"10px" }}>🎨 ثيم البورد</p>
+          <p style={{ color:"#aaa", textAlign:"center", marginBottom:"10px" }}>🎨 Board Theme</p>
           <div style={{ display:"flex", gap:"10px" }}>
             {THEMES.map(t => (
               <div key={t.name} onClick={() => setTheme(t)}
@@ -397,32 +407,33 @@ export default function App() {
   if (mode === "online" && !gameId) {
     return (
       <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100vh", gap:"16px", background:"#1a1a2e" }}>
-        <h2 style={{ color:"white" }}>🌐 أون لاين</h2>
-        <button onClick={createOnlineGame} style={btnStyle("#4CAF50")}>➕ إنشاء لعبة جديدة</button>
-        <p style={{ color:"#aaa" }}>أو</p>
-        <input placeholder="أدخل كود اللعبة" value={joinId} onChange={e => setJoinId(e.target.value)}
+        <h2 style={{ color:"white" }}>🌐 Online Play</h2>
+        <button onClick={createOnlineGame} style={btnStyle("#4CAF50")}>➕ Create New Game</button>
+        <p style={{ color:"#aaa" }}>or</p>
+        <input placeholder="Enter game code" value={joinId} onChange={e => setJoinId(e.target.value)}
           style={{ padding:"10px", fontSize:"18px", borderRadius:"8px", border:"1px solid #ccc", textAlign:"center", width:"200px" }} />
-        <button onClick={joinOnlineGame} style={btnStyle("#2196F3")}>🔗 انضم للعبة</button>
-        <button onClick={goHome} style={btnStyle("#555")}>🏠 رجوع</button>
+        <button onClick={joinOnlineGame} style={btnStyle("#2196F3")}>🔗 Join Game</button>
+        <button onClick={goHome} style={btnStyle("#555")}>🏠 Back</button>
       </div>
     );
   }
 
   return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center", padding:"12px", background:"#1a1a2e", minHeight:"100vh", gap:"10px" }}>
-      <h2 style={{ margin:0, color:"white" }}>♟️ {mode==="ai" ? "Chess vs AI" : "Chess Online"}</h2>
+      <h2 style={{ margin:0, color:"white" }}>♟️ {mode==="ai" ? "Chess vs Engine" : "Chess Online"}</h2>
 
       {mode==="online" && gameId && (
         <div style={{ background:"#16213e", padding:"6px 16px", borderRadius:"8px", textAlign:"center" }}>
-          <p style={{ margin:0, color:"white", fontWeight:"bold" }}>كود: <span style={{ color:"#4CAF50", fontSize:"20px" }}>{gameId}</span></p>
+          <p style={{ margin:0, color:"white", fontWeight:"bold" }}>Code: <span style={{ color:"#4CAF50", fontSize:"20px" }}>{gameId}</span></p>
+          <p style={{ margin:0, color:"#aaa", fontSize:"12px" }}>You are playing as {playerColorRef.current === "w" ? "⬜ White" : "⬛ Black"}</p>
         </div>
       )}
 
       {mode==="ai" && (
         <div style={{ display:"flex", gap:"8px" }}>
-          {[{label:"سهل 🟢",depth:2},{label:"متوسط 🟡",depth:6},{label:"صعب 🔴",depth:15}].map(d => (
-            <button key={d.depth} onClick={() => { setDifficulty(d.depth); resetGame(); }}
-              style={{ padding:"6px 14px", borderRadius:"8px", border:"none", cursor:"pointer", background: difficulty===d.depth?"#4CAF50":"#333", color:"white", fontWeight:"bold" }}>
+          {DIFFICULTIES.map((d, i) => (
+            <button key={i} onClick={() => { setDifficultyIdx(i); resetGame(); }}
+              style={{ padding:"6px 14px", borderRadius:"8px", border:"none", cursor:"pointer", background: difficultyIdx===i?"#4CAF50":"#333", color:"white", fontWeight:"bold" }}>
               {d.label}
             </button>
           ))}
@@ -444,7 +455,7 @@ export default function App() {
             arePiecesDraggable={!gameOver && !waitingForPlayer && !isReviewing}
             animationDuration={200}
             customSquareStyles={isReviewing ? {} : optionSquares}
-            boardOrientation={mode==="online" && playerColor==="b" ? "black" : "white"}
+            boardOrientation={mode==="online" && playerColorRef.current==="b" ? "black" : "white"}
             customDarkSquareStyle={{ backgroundColor: theme.dark }}
             customLightSquareStyle={{ backgroundColor: theme.light }}
           />
@@ -454,7 +465,7 @@ export default function App() {
           </div>
 
           <p style={{ margin:0, color: isReviewing?"#aaa":"white", textAlign:"center", fontSize:"15px" }}>
-            {isReviewing ? `📖 مراجعة الحركة ${viewIndex} / ${sanHistory.length}` : status}
+            {isReviewing ? `📖 Reviewing move ${viewIndex} / ${sanHistory.length}` : status}
           </p>
 
           {sanHistory.length > 0 && (
@@ -468,21 +479,21 @@ export default function App() {
               }} style={navBtn()}>▶</button>
               <button onClick={() => { setViewIndex(-1); setOptionSquares({}); }}
                 style={navBtn(isReviewing ? "#c0392b" : "#333")}>
-                {isReviewing ? "🔴 مباشر" : "⏭"}
+                {isReviewing ? "🔴 Live" : "⏭"}
               </button>
             </div>
           )}
         </div>
 
         <div style={{ background:"#16213e", borderRadius:"12px", padding:"12px", width:"170px" }}>
-          <p style={{ color:"#4CAF50", margin:"0 0 8px 0", fontWeight:"bold", textAlign:"center" }}>📋 سجل الحركات</p>
+          <p style={{ color:"#4CAF50", margin:"0 0 8px 0", fontWeight:"bold", textAlign:"center" }}>📋 Move History</p>
           <div style={{ display:"flex", gap:"4px", marginBottom:"6px", borderBottom:"1px solid #333", paddingBottom:"4px" }}>
             <span style={{ color:"#555", minWidth:"22px", fontSize:"11px" }}>#</span>
-            <span style={{ color:"#aaa", minWidth:"60px", fontSize:"11px" }}>⬜ أبيض</span>
-            <span style={{ color:"#aaa", fontSize:"11px" }}>⬛ أسود</span>
+            <span style={{ color:"#aaa", minWidth:"60px", fontSize:"11px" }}>⬜ White</span>
+            <span style={{ color:"#aaa", fontSize:"11px" }}>⬛ Black</span>
           </div>
           <div ref={moveListRef} style={{ maxHeight:"320px", overflowY:"auto" }}>
-            {movePairs.length === 0 && <p style={{ color:"#555", textAlign:"center", fontSize:"12px" }}>لا توجد حركات</p>}
+            {movePairs.length === 0 && <p style={{ color:"#555", textAlign:"center", fontSize:"12px" }}>No moves yet</p>}
             {movePairs.map(pair => (
               <div key={pair.num} style={{ display:"flex", gap:"4px", marginBottom:"3px", fontSize:"13px" }}>
                 <span style={{ color:"#555", minWidth:"22px" }}>{pair.num}.</span>
@@ -503,8 +514,8 @@ export default function App() {
       </div>
 
       <div style={{ display:"flex", gap:"10px", flexWrap:"wrap", justifyContent:"center" }}>
-        {mode==="ai" && <button onClick={resetGame} style={btnStyle("#4CAF50")}>لعبة جديدة 🔄</button>}
-        <button onClick={goHome} style={btnStyle("#555")}>🏠 رجوع</button>
+        {mode==="ai" && <button onClick={resetGame} style={btnStyle("#4CAF50")}>New Game 🔄</button>}
+        <button onClick={goHome} style={btnStyle("#555")}>🏠 Home</button>
       </div>
     </div>
   );
