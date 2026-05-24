@@ -11,11 +11,4 @@ export const DIFFICULTIES = [
   { label: "Hard 🔴", depth: 15, moveTime: 3000 },
 ];
 
-export const TIMER_OPTIONS = [
-  { label: "1 min", seconds: 60 },
-  { label: "3 min", seconds: 180 },
-  { label: "5 min", seconds: 300 },
-  { label: "10 min", seconds: 600 },
-];
-
 export const INITIAL_TIME = 600;

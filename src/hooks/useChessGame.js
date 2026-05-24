@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import { Chess } from "chess.js";
-import { getCheckStyle, getMoveOptions, buildFenHistory } from "../utils/chessHelpers";
+import { getCheckStyle, getMoveOptions, buildFenHistory } from "../utils/helpers";
 import { SoundService } from "../services/soundService";
 
 export function useChessGame() {
@@ -34,16 +34,6 @@ export function useChessGame() {
     setViewIndex(-1);
   }, []);
 
-  const selectSquare = useCallback((square, g) => {
-    const options = getMoveOptions(square, g);
-    if (options) {
-      setSelectedSquare(square);
-      setOptionSquares(options);
-      return true;
-    }
-    return false;
-  }, []);
-
   const clearSelection = useCallback((g) => {
     setSelectedSquare(null);
     setOptionSquares(getCheckStyle(g));
@@ -59,13 +49,11 @@ export function useChessGame() {
   const handleGameEnd = useCallback((g, move) => {
     if (g.isCheckmate()) {
       SoundService.checkmate();
-      setStatus("Checkmate! 🏆");
       setGameOver(true);
       return "checkmate";
     }
     if (g.isDraw()) {
       SoundService.draw();
-      setStatus("Draw! 🤝");
       setGameOver(true);
       return "draw";
     }
@@ -96,10 +84,10 @@ export function useChessGame() {
     setSelectedSquare(null);
   }, []);
 
-  const getBoardFen = useCallback(() => {
-    if (viewIndex === -1) return game.fen();
-    return fenHistory[viewIndex] ?? game.fen();
-  }, [viewIndex, fenHistory, game]);
+  const getBoardFen = useCallback((vi, fh, g) => {
+    if (vi === -1) return g.fen();
+    return fh[vi] ?? g.fen();
+  }, []);
 
   const movePairs = [];
   for (let i = 0; i < sanHistory.length; i += 2) {
@@ -119,9 +107,9 @@ export function useChessGame() {
     viewIndex, setViewIndex,
     status, setStatus,
     gameOver, setGameOver,
-    reset, recordMove, selectSquare,
-    clearSelection, applyMove,
-    handleGameEnd, loadFromSan,
-    goToMove, getBoardFen, movePairs,
+    reset, recordMove, clearSelection,
+    applyMove, handleGameEnd,
+    loadFromSan, goToMove, getBoardFen,
+    movePairs,
   };
 }

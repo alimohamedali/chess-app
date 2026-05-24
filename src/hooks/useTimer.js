@@ -9,8 +9,10 @@ export function useTimer(initialTime = 600) {
   const turnRef = useRef("w");
   const timerRef = useRef(null);
   const onTimeoutRef = useRef(null);
+  const activeRef = useRef(false);
 
   const stop = useCallback(() => {
+    activeRef.current = false;
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
@@ -21,17 +23,19 @@ export function useTimer(initialTime = 600) {
     stop();
     turnRef.current = turn;
     onTimeoutRef.current = onTimeout;
+    activeRef.current = true;
 
     timerRef.current = setInterval(() => {
+      if (!activeRef.current) return;
       if (turnRef.current === "w") {
-        wtRef.current -= 1;
+        wtRef.current = Math.max(0, wtRef.current - 1);
         setWhiteTime(wtRef.current);
         if (wtRef.current <= 0) {
           stop();
           onTimeoutRef.current?.("w");
         }
       } else {
-        btRef.current -= 1;
+        btRef.current = Math.max(0, btRef.current - 1);
         setBlackTime(btRef.current);
         if (btRef.current <= 0) {
           stop();

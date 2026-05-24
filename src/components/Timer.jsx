@@ -1,35 +1,28 @@
-import { formatTime } from "../utils/chessHelpers";
+import { formatTime } from "../utils/formatters";
+import { timerStyle, text } from "../styles/components";
 
-export default function Timer({ whiteTime, blackTime, currentTurn, gameOver, isReviewing }) {
-  const activeColor = !isReviewing && !gameOver ? currentTurn : null;
+export default function Timer({
+  topColor, bottomColor,
+  whiteTime, blackTime,
+  currentTurn, gameOver, isReviewing,
+}) {
+  const isActive = (color) => !isReviewing && !gameOver && currentTurn === color;
+  const topTime = topColor === "w" ? whiteTime : blackTime;
+  const bottomTime = bottomColor === "w" ? whiteTime : blackTime;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%" }}>
-      {/* Black Timer */}
-      <div style={{
-        background: activeColor === "b" ? "#c0392b" : "#16213e",
-        borderRadius: "8px",
-        padding: "6px 16px",
-        textAlign: "center",
-        transition: "background 0.3s",
-      }}>
-        <span style={{ color: "white", fontSize: "20px", fontWeight: "bold" }}>
-          ⬛ {formatTime(blackTime)}
+    <>
+      <div style={timerStyle(isActive(topColor))}>
+        <span style={text.timerText}>
+          {topColor === "w" ? "⬜" : "⬛"} {formatTime(topTime)}
         </span>
       </div>
 
-      {/* White Timer */}
-      <div style={{
-        background: activeColor === "w" ? "#c0392b" : "#16213e",
-        borderRadius: "8px",
-        padding: "6px 16px",
-        textAlign: "center",
-        transition: "background 0.3s",
-      }}>
-        <span style={{ color: "white", fontSize: "20px", fontWeight: "bold" }}>
-          ⬜ {formatTime(whiteTime)}
+      <div style={timerStyle(isActive(bottomColor))}>
+        <span style={text.timerText}>
+          {bottomColor === "w" ? "⬜" : "⬛"} {formatTime(bottomTime)}
         </span>
       </div>
-    </div>
+    </>
   );
 }
