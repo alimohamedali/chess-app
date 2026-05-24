@@ -4,7 +4,16 @@ import { generateGameId } from "../utils/helpers";
 const supabaseUrl = "https://xnqdkqosssgzasbdzhzm.supabase.co";
 const supabaseKey = "sb_publishable_0BpVns8iwgqSf8qlKb3ZEg_Bgkiufpq";
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+export const supabase = createClient(supabaseUrl, supabaseKey, {
+  realtime: {
+    params: {
+      eventsPerSecond: 10,
+    },
+  },
+});
+
+// Track all active channels globally
+const activeChannels = new Set();
 
 export const GameService = {
   async createGame(playerId, colorChoice = "w") {
@@ -65,24 +74,44 @@ export const GameService = {
   },
 
   async finishGame(gameId) {
-    await supabase.from("games").update({ status: "finished" }).eq("id", gameId);
+    await supabase.from("games")
+      .update({ status: "finished" })
+      .eq("id", gameId);
   },
 
   subscribeToGame(gameId, callback) {
-    const channelName = `game-${gameId}-${Date.now()}`;
-    return supabase.channel(channelName)
+    // Remove ALL existing channels first
+    GameService.unsubscribeAll();
+
+    const channelName = `game-${gameId}`;
+    const channel = supabase
+      .channel(channelName)
       .on("postgres_changes", {
         event: "UPDATE",
         schema: "public",
         table: "games",
         filter: `id=eq.${gameId}`,
       }, (payload) => callback(payload.new))
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`Channel ${channelName} status:`, status);
+      });
+
+    activeChannels.add(channel);
+    return channel;
   },
 
   unsubscribe(channel) {
     if (channel) {
-      supabase.removeChannel(channel).catch(() => {});
+      supabase.removeChannel(channel)
+        .catch(() => {})
+        .finally(() => activeChannels.delete(channel));
     }
+  },
+
+  unsubscribeAll() {
+    activeChannels.forEach(channel => {
+      supabase.removeChannel(channel).catch(() => {});
+    });
+    activeChannels.clear();
   },
 };

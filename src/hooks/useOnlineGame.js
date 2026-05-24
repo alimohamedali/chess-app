@@ -14,20 +14,24 @@ export function useOnlineGame({
   const gameIdRef = useRef("");
 
   const cleanup = useCallback(() => {
+    // Unsubscribe from current channel
     if (subscriptionRef.current) {
       GameService.unsubscribe(subscriptionRef.current);
       subscriptionRef.current = null;
     }
+    // Also clean up any lingering channels
+    GameService.unsubscribeAll();
   }, []);
 
   const subscribeToGame = useCallback((id, color) => {
+    // Always cleanup before subscribing
     cleanup();
+
     const ch = GameService.subscribeToGame(id, (data) => {
       const ng = new Chess(data.fen);
       chess.loadFromSan(ng.history());
       chess.setGame(ng);
 
-      // Opponent joined
       if (data.status === "playing" && waitingRef.current) {
         waitingRef.current = false;
         timer.start("w", onTimeout);
@@ -61,6 +65,7 @@ export function useOnlineGame({
       chess.setOptionSquares({});
       chess.setViewIndex(-1);
     });
+
     subscriptionRef.current = ch;
   }, [chess, timer, cleanup, onTimeout, onOpponentJoined]);
 
