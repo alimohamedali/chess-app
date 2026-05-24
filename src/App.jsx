@@ -1,92 +1,46 @@
 import { useState, useEffect, useRef } from "react";
 import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
-import { supabase } from "./supabase";
 
-function createSound(type) {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain); gain.connect(ctx.destination);
-    if (type === "move") {
-      osc.frequency.setValueAtTime(440, ctx.currentTime);
-      gain.gain.setValueAtTime(0.3, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
-      osc.start(); osc.stop(ctx.currentTime + 0.1);
-    } else if (type === "capture") {
-      osc.frequency.setValueAtTime(200, ctx.currentTime);
-      gain.gain.setValueAtTime(0.4, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
-      osc.start(); osc.stop(ctx.currentTime + 0.2);
-    } else if (type === "check") {
-      osc.frequency.setValueAtTime(600, ctx.currentTime);
-      osc.frequency.setValueAtTime(800, ctx.currentTime + 0.1);
-      gain.gain.setValueAtTime(0.4, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
-      osc.start(); osc.stop(ctx.currentTime + 0.3);
-    } else if (type === "checkmate") {
-      osc.frequency.setValueAtTime(300, ctx.currentTime);
-      osc.frequency.setValueAtTime(200, ctx.currentTime + 0.2);
-      osc.frequency.setValueAtTime(100, ctx.currentTime + 0.4);
-      gain.gain.setValueAtTime(0.5, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
-      osc.start(); osc.stop(ctx.currentTime + 0.6);
-    }
-  } catch (e) {}
+import { useChessGame } from "./hooks/useChessGame";
+import { useTimer } from "./hooks/useTimer";
+import { useStockfish } from "./hooks/useStockfish";
+
+import { SoundService } from "./services/soundService";
+import { GameService } from "./services/supabaseService";
+
+import { getCheckStyle, getMoveOptions, generatePlayerId } from "./utils/chessHelpers";
+import { THEMES } from "./utils/constants";
+
+import HomeScreen from "./components/HomeScreen";
+import OnlineLobby from "./components/OnlineLobby";
+import MoveHistory from "./components/MoveHistory";
+import GameControls from "./components/GameControls";
+
+function formatTime(seconds) {
+  return `${Math.floor(seconds / 60).toString().padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
 }
-
-function formatTime(s) {
-  return `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
-}
-
-function generateGameId() {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
-}
-
-const THEMES = [
-  { name: "Classic", light: "#f0d9b5", dark: "#b58863" },
-  { name: "Blue", light: "#dee3e6", dark: "#8ca2ad" },
-  { name: "Green", light: "#ffffdd", dark: "#86a666" },
-  { name: "Purple", light: "#f0e6ff", dark: "#9b72cf" },
-];
-
-const DIFFICULTIES = [
-  { label: "Easy 🟢", depth: 2, moveTime: 1500 },
-  { label: "Medium 🟡", depth: 6, moveTime: 2000 },
-  { label: "Hard 🔴", depth: 15, moveTime: 3000 },
-];
 
 export default function App() {
-  const [game, setGame] = useState(new Chess());
-  const [boardSize, setBoardSize] = useState(450);
-  const [status, setStatus] = useState("Your turn! 🎯");
-  const [optionSquares, setOptionSquares] = useState({});
-  const [selectedSquare, setSelectedSquare] = useState(null);
-  const [difficultyIdx, setDifficultyIdx] = useState(1);
-  const [gameOver, setGameOver] = useState(false);
   const [mode, setMode] = useState(null);
+  const [theme, setTheme] = useState(THEMES[0]);
+  const [difficultyIdx, setDifficultyIdx] = useState(1);
+  const [boardSize, setBoardSize] = useState(450);
+  const [lobbyStatus, setLobbyStatus] = useState("");
+
+  // Online state
   const [gameId, setGameId] = useState("");
-  const [joinId, setJoinId] = useState("");
   const [playerColor, setPlayerColor] = useState("w");
   const [waitingForPlayer, setWaitingForPlayer] = useState(false);
-  const [theme, setTheme] = useState(THEMES[0]);
-  const [fenHistory, setFenHistory] = useState([]);
-  const [sanHistory, setSanHistory] = useState([]);
-  const [viewIndex, setViewIndex] = useState(-1);
-  const [whiteTime, setWhiteTime] = useState(600);
-  const [blackTime, setBlackTime] = useState(600);
-
-  const wtRef = useRef(600);
-  const btRef = useRef(600);
-  const turnRef = useRef("w");
-  const gameOverRef = useRef(false);
-  const timerRef = useRef(null);
-  const stockfish = useRef(null);
-  const subscriptionRef = useRef(null);
-  const moveListRef = useRef(null);
   const playerColorRef = useRef("w");
+  const subscriptionRef = useRef(null);
+  const waitingRef = useRef(false);
 
+  const chess = useChessGame();
+  const timer = useTimer(600);
+  const stockfish = useStockfish();
+
+  // Board size
   useEffect(() => {
     const updateSize = () => {
       setBoardSize(Math.min(window.innerWidth * 0.9, window.innerHeight * 0.72, 450));
@@ -96,435 +50,340 @@ export default function App() {
     return () => window.removeEventListener("resize", updateSize);
   }, []);
 
+  // Mode init
   useEffect(() => {
     if (mode === "ai") {
-      stockfish.current = new Worker("/stockfish.js");
-      stockfish.current.postMessage("uci");
-      stockfish.current.postMessage("isready");
-      setTimeout(() => resetGame(), 100);
+      stockfish.init();
+      setTimeout(() => {
+        chess.reset();
+        timer.reset(600);
+        setTimeout(() => timer.start("w", handleTimeout), 200);
+      }, 100);
     }
     return () => {
-      if (stockfish.current) { stockfish.current.terminate(); stockfish.current = null; }
-      if (subscriptionRef.current) supabase.removeChannel(subscriptionRef.current);
-      stopTimer();
+      stockfish.terminate();
+      timer.stop();
+      if (subscriptionRef.current) GameService.unsubscribe(subscriptionRef.current);
     };
   }, [mode]);
 
-  useEffect(() => {
-    if (moveListRef.current) moveListRef.current.scrollTop = moveListRef.current.scrollHeight;
-  }, [sanHistory]);
+  function handleTimeout(color) {
+    chess.setGameOver(true);
+    chess.setStatus(color === "w" ? "White's time is up! ⏰" : "Black's time is up! ⏰");
+  }
 
-  function startTimer() {
-    stopTimer();
-    timerRef.current = setInterval(() => {
-      if (gameOverRef.current) { stopTimer(); return; }
-      if (turnRef.current === "w") {
-        wtRef.current -= 1;
-        setWhiteTime(wtRef.current);
-        if (wtRef.current <= 0) {
-          stopTimer(); gameOverRef.current = true;
-          setGameOver(true); setStatus("White's time is up! ⏰");
-        }
+  // ===== AI Move =====
+  function makeAIMove(g) {
+    chess.setStatus("Engine thinking... 🤔");
+    stockfish.getBestMove(g.fen(), difficultyIdx, (newGame, move) => {
+      const result = chess.handleGameEnd(newGame, move);
+      if (result === "checkmate") {
+        chess.setStatus("Engine wins! 😢");
+        timer.stop();
+      } else if (result === "draw") {
+        chess.setStatus("Draw! 🤝");
+        timer.stop();
+      } else if (result === "check") {
+        chess.setStatus("Check! ⚠️ Your turn");
       } else {
-        btRef.current -= 1;
-        setBlackTime(btRef.current);
-        if (btRef.current <= 0) {
-          stopTimer(); gameOverRef.current = true;
-          setGameOver(true); setStatus("Black's time is up! ⏰");
-        }
+        chess.setStatus("Your turn! 🎯");
       }
-    }, 1000);
-  }
-
-  function stopTimer() {
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-  }
-
-  function getKingSquare(g) {
-    const board = g.board();
-    for (let r = 0; r < 8; r++)
-      for (let c = 0; c < 8; c++) {
-        const p = board[r][c];
-        if (p && p.type === "k" && p.color === g.turn())
-          return "abcdefgh"[c] + (8 - r);
-      }
-    return null;
-  }
-
-  function getCheckStyle(g) {
-    const s = {};
-    if (g.inCheck()) {
-      const sq = getKingSquare(g);
-      if (sq) s[sq] = { backgroundColor: "rgba(255,0,0,0.5)" };
-    }
-    return s;
-  }
-
-  function getMoveOptions(square, g) {
-    const moves = g.moves({ square, verbose: true });
-    if (!moves.length) return false;
-    const sq = {};
-    moves.forEach(m => {
-      sq[m.to] = {
-        background: g.get(m.to)
-          ? "radial-gradient(circle, rgba(255,0,0,0.4) 85%, transparent 85%)"
-          : "radial-gradient(circle, rgba(0,0,0,0.2) 25%, transparent 25%)",
-        borderRadius: "50%",
-      };
+      chess.setGame(newGame);
+      chess.recordMove(newGame, move.san);
+      chess.setOptionSquares(getCheckStyle(newGame));
+      timer.switchTurn(newGame.turn());
     });
-    sq[square] = { backgroundColor: "rgba(255,255,0,0.4)" };
-    setOptionSquares({ ...getCheckStyle(g), ...sq });
-    return true;
   }
 
-  function recordMove(newGame, san) {
-    setFenHistory(prev => [...prev, newGame.fen()]);
-    setSanHistory(prev => [...prev, san]);
-    turnRef.current = newGame.turn();
-    setViewIndex(-1);
-  }
-
+  // ===== Handle Move =====
   function handleMove(from, to) {
-    if (gameOver || gameOverRef.current || viewIndex !== -1) return false;
+    if (chess.gameOver || chess.viewIndex !== -1) return false;
     if (mode === "online") {
-      if (game.turn() !== playerColorRef.current) return false;
-      if (waitingForPlayer) return false;
+      if (chess.game.turn() !== playerColorRef.current) return false;
+      if (waitingRef.current) return false;
     }
 
-    const g = new Chess(game.fen());
-    const move = g.move({ from, to, promotion: "q" });
-    if (!move) return false;
+    const result = chess.applyMove(from, to, chess.game);
+    if (!result) return false;
 
-    setSelectedSquare(null);
-    setOptionSquares({});
+    const { newGame, move } = result;
+    chess.setSelectedSquare(null);
+    chess.setOptionSquares({});
 
     if (mode === "ai") {
-      if (g.isCheckmate()) {
-        createSound("checkmate"); setGame(g); recordMove(g, move.san);
-        stopTimer(); gameOverRef.current = true; setGameOver(true); setStatus("You win! 🎉");
-        return true;
-      } else if (g.isDraw()) {
-        setGame(g); recordMove(g, move.san);
-        stopTimer(); gameOverRef.current = true; setGameOver(true); setStatus("Draw! 🤝");
+      const status = chess.handleGameEnd(newGame, move);
+      chess.setGame(newGame);
+      chess.recordMove(newGame, move.san);
+
+      if (status === "checkmate") {
+        chess.setStatus("You win! 🎉");
+        timer.stop();
         return true;
       }
-      if (g.inCheck()) createSound("check");
-      else if (move.captured) createSound("capture");
-      else createSound("move");
-      setGame(g);
-      recordMove(g, move.san);
-      setOptionSquares(getCheckStyle(g));
-      const delay = DIFFICULTIES[difficultyIdx].moveTime;
-      setTimeout(() => makeStockfishMove(g), delay);
+      if (status === "draw") {
+        timer.stop();
+        return true;
+      }
+      if (status === "check") chess.setStatus("Check! ⚠️");
+
+      chess.setOptionSquares(getCheckStyle(newGame));
+      timer.switchTurn(newGame.turn());
+      makeAIMove(newGame);
+
     } else if (mode === "online") {
-      if (move.captured) createSound("capture"); else createSound("move");
-      setGame(g); recordMove(g, move.san);
-      makeOnlineMove(g);
-      setStatus("Opponent's turn... ⏳");
+      if (move.captured) SoundService.capture();
+      else SoundService.move();
+      chess.setGame(newGame);
+      chess.recordMove(newGame, move.san);
+      chess.setStatus("Opponent's turn... ⏳");
+      timer.switchTurn(newGame.turn());
+      GameService.updateGame(gameId, newGame.fen(), newGame.turn()).catch(console.error);
     }
+
     return true;
   }
 
   function onDrop(src, tgt) { return handleMove(src, tgt); }
 
   function onSquareClick(sq) {
-    if (gameOver || gameOverRef.current || viewIndex !== -1) return;
+    if (chess.gameOver || chess.viewIndex !== -1) return;
     if (mode === "online") {
-      if (game.turn() !== playerColorRef.current) return;
-      if (waitingForPlayer) return;
+      if (chess.game.turn() !== playerColorRef.current || waitingRef.current) return;
     }
-    const piece = game.get(sq);
-    if (piece && piece.color === game.turn()) {
-      setSelectedSquare(sq); getMoveOptions(sq, game); return;
+
+    const piece = chess.game.get(sq);
+    if (piece && piece.color === chess.game.turn()) {
+      const options = getMoveOptions(sq, chess.game);
+      if (options) {
+        chess.setSelectedSquare(sq);
+        chess.setOptionSquares(options);
+      }
+      return;
     }
-    if (selectedSquare) {
-      if (!handleMove(selectedSquare, sq)) {
-        setSelectedSquare(null); setOptionSquares(getCheckStyle(game));
+
+    if (chess.selectedSquare) {
+      if (!handleMove(chess.selectedSquare, sq)) {
+        chess.clearSelection(chess.game);
       }
     }
   }
 
-  function makeStockfishMove(g) {
-    setStatus("Engine thinking... 🤔");
-    stockfish.current.postMessage(`position fen ${g.fen()}`);
-    stockfish.current.postMessage(`go depth ${DIFFICULTIES[difficultyIdx].depth}`);
-    stockfish.current.onmessage = (e) => {
-      const msg = e.data;
-      if (msg.startsWith("bestmove")) {
-        const mv = msg.split(" ")[1];
-        if (!mv || mv === "(none)") return;
-        const ng = new Chess(g.fen());
-        const result = ng.move({ from: mv.slice(0, 2), to: mv.slice(2, 4), promotion: mv[4] || "q" });
-        if (!result) return;
-        recordMove(ng, result.san);
-        if (ng.isCheckmate()) {
-          createSound("checkmate"); stopTimer(); gameOverRef.current = true;
-          setStatus("Engine wins! 😢"); setGameOver(true);
-        } else if (ng.isDraw()) {
-          stopTimer(); gameOverRef.current = true; setStatus("Draw! 🤝"); setGameOver(true);
-        } else if (ng.inCheck()) { createSound("check"); setStatus("Check! ⚠️ Your turn"); }
-        else if (result.captured) { createSound("capture"); setStatus("Your turn! 🎯"); }
-        else { createSound("move"); setStatus("Your turn! 🎯"); }
-        setGame(ng);
-        setOptionSquares(getCheckStyle(ng));
-      }
-    };
+  // ===== Online =====
+  async function handleCreateGame(colorChoice) {
+    const pid = generatePlayerId();
+    localStorage.setItem("playerId", pid);
+    try {
+      const data = await GameService.createGame(pid, colorChoice);
+      const myColor = data.myColor;
+
+      playerColorRef.current = myColor;
+      waitingRef.current = true;
+      setPlayerColor(myColor);
+      setGameId(data.id);
+      setWaitingForPlayer(true);
+      setLobbyStatus(`Share code: ${data.id} 🔗`);
+      chess.setStatus(`Waiting for opponent... Code: ${data.id}`);
+      setMode("online");
+      subscribeToGame(data.id, myColor);
+    } catch (e) {
+      setLobbyStatus("Error creating game ❌");
+    }
   }
 
-  async function createOnlineGame() {
-    const id = generateGameId();
-    const pid = Math.random().toString(36).substring(2);
-    await supabase.from("games").insert({ id, fen: new Chess().fen(), turn: "w", status: "waiting", white_player: pid });
-    playerColorRef.current = "w";
-    setGameId(id); setPlayerColor("w"); setWaitingForPlayer(true);
-    setStatus(`Share code: ${id} 🔗`);
+  async function handleJoinGame(joinId) {
+    if (!joinId) return;
+    const pid = generatePlayerId();
     localStorage.setItem("playerId", pid);
-    subscribeToGame(id, "w");
-  }
+    try {
+      const data = await GameService.joinGame(joinId.toUpperCase().trim(), pid);
+      const myColor = data.myColor;
 
-  async function joinOnlineGame() {
-    const id = joinId.toUpperCase().trim();
-    const pid = Math.random().toString(36).substring(2);
-    const { data } = await supabase.from("games").select("*").eq("id", id).single();
-    if (!data) { setStatus("Wrong code! ❌"); return; }
-    await supabase.from("games").update({ black_player: pid, status: "playing" }).eq("id", id);
-    const ng = new Chess(data.fen);
-    playerColorRef.current = "b";
-    setGameId(id); setPlayerColor("b"); setWaitingForPlayer(false);
-    setGame(ng); setFenHistory([ng.fen()]); setSanHistory(ng.history());
-    setStatus("Game started! White's turn 🎯");
-    localStorage.setItem("playerId", pid);
-    subscribeToGame(id, "b");
-    startTimer();
+      playerColorRef.current = myColor;
+      waitingRef.current = false;
+      setPlayerColor(myColor);
+      setGameId(joinId.toUpperCase().trim());
+      setWaitingForPlayer(false);
+      chess.setStatus("Game started! White's turn 🎯");
+      setMode("online");
+      subscribeToGame(joinId.toUpperCase().trim(), myColor);
+      timer.start("w", handleTimeout);
+    } catch (e) {
+      setLobbyStatus(e.message || "Error joining game ❌");
+    }
   }
 
   function subscribeToGame(id, color) {
-    if (subscriptionRef.current) supabase.removeChannel(subscriptionRef.current);
-    const ch = supabase.channel(`game:${id}`)
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "games", filter: `id=eq.${id}` },
-        (payload) => {
-          const data = payload.new;
-          const ng = new Chess(data.fen);
-          const history = ng.history();
-          setSanHistory(history);
-          const fens = [new Chess().fen()];
-          const tmp = new Chess();
-          history.forEach(san => { tmp.move(san); fens.push(tmp.fen()); });
-          setFenHistory(fens);
-          turnRef.current = ng.turn();
-          setGame(ng);
-          setWaitingForPlayer(data.status === "waiting");
-          if (data.status === "playing") {
-            if (!timerRef.current) startTimer();
-            if (ng.isCheckmate()) {
-              createSound("checkmate"); stopTimer(); gameOverRef.current = true;
-              setStatus("Checkmate! 🏆"); setGameOver(true);
-            } else if (ng.isDraw()) {
-              stopTimer(); gameOverRef.current = true; setStatus("Draw! 🤝"); setGameOver(true);
-            } else if (ng.inCheck()) {
-              createSound("check");
-              setStatus(ng.turn() === color ? "Check! Your turn ⚠️" : "Check on opponent ⚠️");
-            } else {
-              createSound("move");
-              setStatus(ng.turn() === color ? "Your turn! 🎯" : "Opponent's turn... ⏳");
-            }
-          }
-          setOptionSquares({});
-          setViewIndex(-1);
-        }).subscribe();
+    if (subscriptionRef.current) GameService.unsubscribe(subscriptionRef.current);
+    const ch = GameService.subscribeToGame(id, (data) => {
+      const ng = new Chess(data.fen);
+      const history = ng.history();
+      chess.loadFromSan(history);
+      chess.setGame(ng);
+
+      if (data.status === "playing" && waitingRef.current) {
+        waitingRef.current = false;
+        setWaitingForPlayer(false);
+        timer.start("w", handleTimeout);
+      } else if (data.status === "playing") {
+        timer.switchTurn(ng.turn());
+      }
+
+      if (data.status === "playing") {
+        if (ng.isCheckmate()) {
+          SoundService.checkmate();
+          chess.setStatus("Checkmate! 🏆");
+          chess.setGameOver(true);
+          timer.stop();
+        } else if (ng.isDraw()) {
+          SoundService.draw();
+          chess.setStatus("Draw! 🤝");
+          chess.setGameOver(true);
+          timer.stop();
+        } else if (ng.inCheck()) {
+          SoundService.check();
+          chess.setStatus(ng.turn() === color ? "Check! Your turn ⚠️" : "Check on opponent ⚠️");
+        } else {
+          SoundService.move();
+          chess.setStatus(ng.turn() === color ? "Your turn! 🎯" : "Opponent's turn... ⏳");
+        }
+      }
+
+      chess.setOptionSquares({});
+      chess.setViewIndex(-1);
+    });
     subscriptionRef.current = ch;
   }
 
-  async function makeOnlineMove(g) {
-    await supabase.from("games").update({ fen: g.fen(), turn: g.turn(), status: "playing" }).eq("id", gameId);
+  // ===== Reset & Home =====
+  function handleReset() {
+    chess.reset();
+    timer.reset(600);
+    setTimeout(() => timer.start("w", handleTimeout), 200);
   }
 
-  function resetGame() {
-    stopTimer();
-    gameOverRef.current = false;
-    wtRef.current = 600; btRef.current = 600; turnRef.current = "w";
-    const ng = new Chess();
-    setGame(ng); setOptionSquares({}); setSelectedSquare(null);
-    setStatus("Your turn! 🎯"); setGameOver(false);
-    setFenHistory([ng.fen()]); setSanHistory([]); setViewIndex(-1);
-    setWhiteTime(600); setBlackTime(600);
-    setTimeout(() => startTimer(), 200);
-  }
-
-  function goHome() {
-    stopTimer();
-    if (subscriptionRef.current) supabase.removeChannel(subscriptionRef.current);
-    gameOverRef.current = false;
+  function handleHome() {
+    timer.stop();
+    stockfish.terminate();
+    if (subscriptionRef.current) GameService.unsubscribe(subscriptionRef.current);
+    chess.reset();
+    timer.reset(600);
+    waitingRef.current = false;
+    setMode(null);
+    setGameId("");
+    setPlayerColor("w");
     playerColorRef.current = "w";
-    setMode(null); setGameId(""); setJoinId(""); setWaitingForPlayer(false);
-    setGameOver(false); setGame(new Chess()); setOptionSquares({});
-    setSelectedSquare(null); setStatus("Your turn! 🎯");
-    setFenHistory([]); setSanHistory([]); setViewIndex(-1);
-    wtRef.current = 600; btRef.current = 600;
-    setWhiteTime(600); setBlackTime(600);
+    setWaitingForPlayer(false);
+    setLobbyStatus("");
   }
 
-  function getBoardFen() {
-    if (viewIndex === -1) return game.fen();
-    return fenHistory[viewIndex] ?? game.fen();
-  }
+  const isReviewing = chess.viewIndex !== -1;
 
-  function goToMove(idx) {
-    setViewIndex(idx); setOptionSquares({}); setSelectedSquare(null);
-  }
-
-  const movePairs = [];
-  for (let i = 0; i < sanHistory.length; i += 2) {
-    movePairs.push({
-      num: Math.floor(i / 2) + 1,
-      white: { san: sanHistory[i], idx: i + 1 },
-      black: sanHistory[i + 1] ? { san: sanHistory[i + 1], idx: i + 2 } : null,
-    });
-  }
-
-  const isReviewing = viewIndex !== -1;
-
+  // ===== Screens =====
   if (!mode) {
     return (
-      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100vh", gap:"20px", background:"#1a1a2e" }}>
-        <h1 style={{ color:"white", fontSize:"2.5rem" }}>♟️ Chess App</h1>
-        <button onClick={() => setMode("ai")} style={btnStyle("#4CAF50")}>🤖 Play vs Engine</button>
-        <button onClick={() => setMode("online")} style={btnStyle("#2196F3")}>🌐 Play Online</button>
-        <div style={{ marginTop:"10px" }}>
-          <p style={{ color:"#aaa", textAlign:"center", marginBottom:"10px" }}>🎨 Board Theme</p>
-          <div style={{ display:"flex", gap:"10px" }}>
-            {THEMES.map(t => (
-              <div key={t.name} onClick={() => setTheme(t)}
-                style={{ width:"40px", height:"40px", borderRadius:"8px", cursor:"pointer", background:t.dark, border: theme.name===t.name ? "3px solid white" : "3px solid transparent" }}
-                title={t.name} />
-            ))}
-          </div>
-        </div>
-      </div>
+      <HomeScreen
+        onSelectMode={(m) => setMode(m)}
+        theme={theme}
+        onSelectTheme={setTheme}
+      />
     );
   }
 
   if (mode === "online" && !gameId) {
     return (
-      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:"100vh", gap:"16px", background:"#1a1a2e" }}>
-        <h2 style={{ color:"white" }}>🌐 Online Play</h2>
-        <button onClick={createOnlineGame} style={btnStyle("#4CAF50")}>➕ Create New Game</button>
-        <p style={{ color:"#aaa" }}>or</p>
-        <input placeholder="Enter game code" value={joinId} onChange={e => setJoinId(e.target.value)}
-          style={{ padding:"10px", fontSize:"18px", borderRadius:"8px", border:"1px solid #ccc", textAlign:"center", width:"200px" }} />
-        <button onClick={joinOnlineGame} style={btnStyle("#2196F3")}>🔗 Join Game</button>
-        <button onClick={goHome} style={btnStyle("#555")}>🏠 Back</button>
-      </div>
+      <OnlineLobby
+        onCreateGame={handleCreateGame}
+        onJoinGame={handleJoinGame}
+        onBack={handleHome}
+        status={lobbyStatus}
+      />
     );
   }
 
   return (
-    <div style={{ display:"flex", flexDirection:"column", alignItems:"center", padding:"12px", background:"#1a1a2e", minHeight:"100vh", gap:"10px" }}>
-      <h2 style={{ margin:0, color:"white" }}>♟️ {mode==="ai" ? "Chess vs Engine" : "Chess Online"}</h2>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "12px", background: "#1a1a2e", minHeight: "100vh", gap: "10px" }}>
+      <h2 style={{ margin: 0, color: "white" }}>
+        ♟️ {mode === "ai" ? "Chess vs Engine" : "Chess Online"}
+      </h2>
 
-      {mode==="online" && gameId && (
-        <div style={{ background:"#16213e", padding:"6px 16px", borderRadius:"8px", textAlign:"center" }}>
-          <p style={{ margin:0, color:"white", fontWeight:"bold" }}>Code: <span style={{ color:"#4CAF50", fontSize:"20px" }}>{gameId}</span></p>
-          <p style={{ margin:0, color:"#aaa", fontSize:"12px" }}>You are playing as {playerColorRef.current === "w" ? "⬜ White" : "⬛ Black"}</p>
+      {mode === "online" && gameId && (
+        <div style={{ background: "#16213e", padding: "6px 16px", borderRadius: "8px", textAlign: "center" }}>
+          <p style={{ margin: 0, color: "white", fontWeight: "bold" }}>
+            Code: <span style={{ color: "#4CAF50", fontSize: "20px" }}>{gameId}</span>
+          </p>
+          <p style={{ margin: 0, color: "#aaa", fontSize: "12px" }}>
+            You are {playerColorRef.current === "w" ? "⬜ White" : "⬛ Black"}
+          </p>
+          {waitingForPlayer && (
+            <p style={{ margin: 0, color: "#f39c12", fontSize: "12px" }}>
+              ⏳ Waiting for opponent...
+            </p>
+          )}
         </div>
       )}
 
-      {mode==="ai" && (
-        <div style={{ display:"flex", gap:"8px" }}>
-          {DIFFICULTIES.map((d, i) => (
-            <button key={i} onClick={() => { setDifficultyIdx(i); resetGame(); }}
-              style={{ padding:"6px 14px", borderRadius:"8px", border:"none", cursor:"pointer", background: difficultyIdx===i?"#4CAF50":"#333", color:"white", fontWeight:"bold" }}>
-              {d.label}
-            </button>
-          ))}
-        </div>
-      )}
+      <GameControls
+        mode={mode}
+        difficultyIdx={difficultyIdx}
+        onSetDifficulty={(i) => { setDifficultyIdx(i); handleReset(); }}
+        onReset={handleReset}
+        onHome={handleHome}
+        sanHistory={chess.sanHistory}
+        viewIndex={chess.viewIndex}
+        onGoToMove={chess.goToMove}
+        onLive={() => { chess.setViewIndex(-1); chess.setOptionSquares({}); }}
+        isReviewing={isReviewing}
+      />
 
-      <div style={{ display:"flex", gap:"16px", alignItems:"flex-start", flexWrap:"wrap", justifyContent:"center" }}>
-        <div style={{ display:"flex", flexDirection:"column", gap:"8px" }}>
+      <div style={{ display: "flex", gap: "16px", alignItems: "flex-start", flexWrap: "wrap", justifyContent: "center" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
 
-          <div style={{ background: !isReviewing && !gameOver && game.turn()==="b" ? "#c0392b" : "#16213e", borderRadius:"8px", padding:"6px 16px", textAlign:"center", transition:"background 0.3s" }}>
-            <span style={{ color:"white", fontSize:"20px", fontWeight:"bold" }}>⬛ {formatTime(blackTime)}</span>
+          {/* Black Timer */}
+          <div style={{
+            background: !isReviewing && !chess.gameOver && chess.game.turn() === "b" ? "#c0392b" : "#16213e",
+            borderRadius: "8px", padding: "6px 16px", textAlign: "center", transition: "background 0.3s"
+          }}>
+            <span style={{ color: "white", fontSize: "20px", fontWeight: "bold" }}>
+              ⬛ {formatTime(timer.blackTime)}
+            </span>
           </div>
 
           <Chessboard
-            position={getBoardFen()}
+            position={chess.getBoardFen()}
             onPieceDrop={isReviewing ? () => false : onDrop}
             onSquareClick={isReviewing ? undefined : onSquareClick}
             boardWidth={boardSize}
-            arePiecesDraggable={!gameOver && !waitingForPlayer && !isReviewing}
+            arePiecesDraggable={!chess.gameOver && !waitingForPlayer && !isReviewing}
             animationDuration={200}
-            customSquareStyles={isReviewing ? {} : optionSquares}
-            boardOrientation={mode==="online" && playerColorRef.current==="b" ? "black" : "white"}
+            customSquareStyles={isReviewing ? {} : chess.optionSquares}
+            boardOrientation={mode === "online" && playerColorRef.current === "b" ? "black" : "white"}
             customDarkSquareStyle={{ backgroundColor: theme.dark }}
             customLightSquareStyle={{ backgroundColor: theme.light }}
           />
 
-          <div style={{ background: !isReviewing && !gameOver && game.turn()==="w" ? "#c0392b" : "#16213e", borderRadius:"8px", padding:"6px 16px", textAlign:"center", transition:"background 0.3s" }}>
-            <span style={{ color:"white", fontSize:"20px", fontWeight:"bold" }}>⬜ {formatTime(whiteTime)}</span>
+          {/* White Timer */}
+          <div style={{
+            background: !isReviewing && !chess.gameOver && chess.game.turn() === "w" ? "#c0392b" : "#16213e",
+            borderRadius: "8px", padding: "6px 16px", textAlign: "center", transition: "background 0.3s"
+          }}>
+            <span style={{ color: "white", fontSize: "20px", fontWeight: "bold" }}>
+              ⬜ {formatTime(timer.whiteTime)}
+            </span>
           </div>
 
-          <p style={{ margin:0, color: isReviewing?"#aaa":"white", textAlign:"center", fontSize:"15px" }}>
-            {isReviewing ? `📖 Reviewing move ${viewIndex} / ${sanHistory.length}` : status}
+          <p style={{ margin: 0, color: isReviewing ? "#aaa" : "white", textAlign: "center", fontSize: "15px" }}>
+            {isReviewing
+              ? `📖 Reviewing move ${chess.viewIndex} / ${chess.sanHistory.length}`
+              : chess.status}
           </p>
-
-          {sanHistory.length > 0 && (
-            <div style={{ display:"flex", gap:"6px", justifyContent:"center" }}>
-              <button onClick={() => goToMove(1)} style={navBtn()}>⏮</button>
-              <button onClick={() => goToMove(Math.max(1, isReviewing ? viewIndex - 1 : sanHistory.length))} style={navBtn()}>◀</button>
-              <button onClick={() => {
-                if (!isReviewing) return;
-                if (viewIndex >= sanHistory.length) { setViewIndex(-1); return; }
-                goToMove(viewIndex + 1);
-              }} style={navBtn()}>▶</button>
-              <button onClick={() => { setViewIndex(-1); setOptionSquares({}); }}
-                style={navBtn(isReviewing ? "#c0392b" : "#333")}>
-                {isReviewing ? "🔴 Live" : "⏭"}
-              </button>
-            </div>
-          )}
         </div>
 
-        <div style={{ background:"#16213e", borderRadius:"12px", padding:"12px", width:"170px" }}>
-          <p style={{ color:"#4CAF50", margin:"0 0 8px 0", fontWeight:"bold", textAlign:"center" }}>📋 Move History</p>
-          <div style={{ display:"flex", gap:"4px", marginBottom:"6px", borderBottom:"1px solid #333", paddingBottom:"4px" }}>
-            <span style={{ color:"#555", minWidth:"22px", fontSize:"11px" }}>#</span>
-            <span style={{ color:"#aaa", minWidth:"60px", fontSize:"11px" }}>⬜ White</span>
-            <span style={{ color:"#aaa", fontSize:"11px" }}>⬛ Black</span>
-          </div>
-          <div ref={moveListRef} style={{ maxHeight:"320px", overflowY:"auto" }}>
-            {movePairs.length === 0 && <p style={{ color:"#555", textAlign:"center", fontSize:"12px" }}>No moves yet</p>}
-            {movePairs.map(pair => (
-              <div key={pair.num} style={{ display:"flex", gap:"4px", marginBottom:"3px", fontSize:"13px" }}>
-                <span style={{ color:"#555", minWidth:"22px" }}>{pair.num}.</span>
-                <span onClick={() => goToMove(pair.white.idx)}
-                  style={{ color: viewIndex===pair.white.idx?"#4CAF50":"white", minWidth:"60px", cursor:"pointer", fontWeight: viewIndex===pair.white.idx?"bold":"normal", padding:"1px 3px", borderRadius:"3px", background: viewIndex===pair.white.idx?"#1a3a1a":"transparent" }}>
-                  {pair.white.san}
-                </span>
-                {pair.black && (
-                  <span onClick={() => goToMove(pair.black.idx)}
-                    style={{ color: viewIndex===pair.black.idx?"#4CAF50":"#ccc", cursor:"pointer", fontWeight: viewIndex===pair.black.idx?"bold":"normal", padding:"1px 3px", borderRadius:"3px", background: viewIndex===pair.black.idx?"#1a3a1a":"transparent" }}>
-                    {pair.black.san}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div style={{ display:"flex", gap:"10px", flexWrap:"wrap", justifyContent:"center" }}>
-        {mode==="ai" && <button onClick={resetGame} style={btnStyle("#4CAF50")}>New Game 🔄</button>}
-        <button onClick={goHome} style={btnStyle("#555")}>🏠 Home</button>
+        <MoveHistory
+          movePairs={chess.movePairs}
+          viewIndex={chess.viewIndex}
+          onGoToMove={chess.goToMove}
+        />
       </div>
     </div>
   );
-}
-
-function btnStyle(bg) {
-  return { padding:"12px 30px", fontSize:"16px", cursor:"pointer", borderRadius:"8px", border:"none", background:bg, color:"white", fontWeight:"bold", minWidth:"150px" };
-}
-
-function navBtn(bg="#333") {
-  return { padding:"6px 12px", borderRadius:"6px", border:"none", cursor:"pointer", background:bg, color:"white", fontSize:"16px" };
 }
